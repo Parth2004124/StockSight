@@ -188,18 +188,39 @@ async function fetchWithFallback(targetUrl) {
     let lastError;
     for (const proxy of PROXIES) {
         try {
-            const res = await fetch(proxy.url(targetUrl));
+            const controller = new AbortController();
+            const id = setTimeout(() => controller.abort(), 8000); // 8s Timeout
+            
+            const res = await fetch(proxy.url(targetUrl), { signal: controller.signal });
+            clearTimeout(id);
+            
             if(!res.ok) throw new Error(`HTTP ${res.status}`);
             let content = proxy.type === 'json' ? (await res.json()).contents : await res.text();
-            if(!content) throw new Error("Empty/Blocked"); // Removed length check for Search API compatibility
+            if(!content || content.length < 50) throw new Error("Empty/Blocked");
             
-            // Relaxed Yahoo check
             if(targetUrl.includes('yahoo') && !content.includes('Chart') && !content.includes('quoteResponse') && !content.includes('QuoteSummaryStore') && !content.trim().startsWith('{')) throw new Error("Invalid Yahoo");
             
             return content;
         } catch(e) { lastError = e; }
     }
     throw lastError;
+}
+
+// Helper to find correct symbol using Yahoo's open Autocomplete
+async function resolveSymbolWithYahoo(query) {
+    try {
+        const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=1&newsCount=0`;
+        const jsonStr = await fetchWithFallback(url);
+        const json = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
+        if (json && json.quotes && json.quotes.length > 0) {
+            const sym = json.quotes[0].symbol;
+            // Clean it for Screener (remove .NS, .BO)
+            return sym.replace('.NS', '').replace('.BO', '');
+        }
+    } catch(e) {
+        console.warn("Yahoo resolution failed", e);
+    }
+    return null;
 }
 
 async function fetchAsset(input) {
@@ -209,7 +230,8 @@ async function fetchAsset(input) {
     activeRequests++;
     updateReqCount();
     
-    let sym = input.toUpperCase();
+    // Step 1: Clean Ticker Logic from your script
+    let sym = input.toUpperCase().split('.')[0].trim();
     
     try {
         if (/^\d{5,6}$/.test(sym)) await fetchMutualFund(sym);
@@ -230,7 +252,6 @@ async function fetchMutualFund(code) {
     const url = `https://api.mfapi.in/mf/${code}`;
     let json;
     
-    // Try Direct First
     try {
         const res = await fetch(url);
         if (res.ok) {
@@ -239,7 +260,6 @@ async function fetchMutualFund(code) {
             throw new Error("Direct MF Failed");
         }
     } catch(e) {
-        // Fallback to Proxies if Direct Fails (e.g. CORS)
         try {
             const jsonStr = await fetchWithFallback(url);
             json = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
@@ -264,86 +284,116 @@ async function fetchMutualFund(code) {
 async function fetchStockOrETF(sym) {
     const isLikelyETF = ETF_KEYWORDS.some(k => sym.includes(k));
     
-    // 1. Screener for Stocks (if not ETF keyword)
+    // --- HYBRID FETCH STRATEGY ---
+    
+    // 1. Try Screener (Main Source)
     if (!isLikelyETF) {
         try {
             let html;
-            try {
-                // OPTIMIZATION: If the ticker contains a space (e.g. "HDFC BANK"), 
-                // skip direct fetch to avoid waiting for 404s/timeouts and go straight to search.
-                if (sym.includes(' ')) throw new Error("Space in ticker, use search");
+            let usedResolvedSym = false;
 
-                // Try direct access first (Works for INFOSYS, TCS, etc)
+            try {
+                // If contains space or weird chars, resolve first via Yahoo
+                if (sym.includes(' ') || sym.includes('&')) {
+                    const resolved = await resolveSymbolWithYahoo(sym);
+                    if (resolved) {
+                        sym = resolved;
+                        usedResolvedSym = true;
+                    }
+                }
+
+                // Direct Screener URL using clean ticker
                 html = await fetchWithFallback(`https://www.screener.in/company/${sym}/consolidated/`);
-            } catch (directErr) {
-                // If direct fails or has space, SEARCH Screener API (Works for HUL, HDFC, L&T)
-                const searchRes = await fetchWithFallback(`https://www.screener.in/api/company/search/?q=${encodeURIComponent(sym)}`);
-                const searchJson = typeof searchRes === 'string' ? JSON.parse(searchRes) : searchRes;
                 
-                if (searchJson && searchJson.length > 0) {
-                    // Extract the correct URL from search result (e.g., /company/HINDUNILVR/)
-                    const correctUrl = searchJson[0].url;
-                    html = await fetchWithFallback(`https://www.screener.in${correctUrl}consolidated/`);
+            } catch (directErr) {
+                // If direct access failed, try resolving if we haven't already
+                if (!usedResolvedSym) {
+                    const resolved = await resolveSymbolWithYahoo(sym);
+                    if (resolved && resolved !== sym) {
+                         sym = resolved;
+                         html = await fetchWithFallback(`https://www.screener.in/company/${sym}/consolidated/`);
+                    } else {
+                        throw directErr;
+                    }
                 } else {
-                    throw directErr; // Throw original error if search yields nothing
+                    throw directErr;
                 }
             }
 
+            if (html.includes("human") && html.includes("verification")) throw new Error("Screener Blocked");
+
+            // PARSE DATA (Logic adapted from your script)
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
-            const ratios = doc.getElementById('top-ratios');
-            if (ratios) {
-                const getVal = (txt) => {
-                    for(let li of ratios.querySelectorAll('li')) {
-                        if(li.innerText.toLowerCase().includes(txt.toLowerCase())) return parseFloat(li.querySelector('.number')?.innerText.replace(/,/g,'') || 0);
+            const ratioList = doc.querySelectorAll('li[class*="flex"]'); // Flexible selector for ratio items
+            
+            const getRatio = (keywords) => {
+                const keys = Array.isArray(keywords) ? keywords : [keywords];
+                for (let li of ratioList) {
+                    const text = li.innerText.toLowerCase();
+                    if (keys.some(k => text.includes(k.toLowerCase()))) {
+                        const num = li.querySelector('.number');
+                        return num ? parseFloat(num.innerText.replace(/,/g, '')) : null;
                     }
-                    return null;
-                };
-                const price = getVal('Current Price');
-                if(price) {
-                    let growth = 0;
-                    let opm = getVal('OPM %') || 0; 
-                    let profitGrowth = 0;
-                    const idxSales = html.indexOf("Compounded Sales Growth");
-                    if(idxSales > -1) {
-                        const sub = html.substring(idxSales, idxSales+1500);
-                        let m = sub.match(/3 Years:[\s\S]*?([0-9\.-]+)\s?%/i);
-                        growth = m ? parseFloat(m[1]) : 0;
-                    }
-                    const idxProfit = html.indexOf("Compounded Profit Growth");
-                    if(idxProfit > -1) {
-                        const sub = html.substring(idxProfit, idxProfit+1500);
-                        let m = sub.match(/3 Years:[\s\S]*?([0-9\.-]+)\s?%/i);
-                        profitGrowth = m ? parseFloat(m[1]) : 0;
-                    }
-                    let extraData = {};
-                    try {
-                        const yData = await fetchYahooQuote(`${sym}.NS`);
-                        if(yData) extraData = { beta: yData.beta, returns: yData.returns };
-                    } catch(e) {}
-                    const data = { 
-                        name: doc.querySelector('h1')?.innerText || sym, 
-                        price: price, 
-                        pe: getVal('Stock P/E'), 
-                        roe: getVal('ROE'),
-                        roce: getVal('ROCE'), 
-                        mcap: getVal('Market Cap'),
-                        opm: opm,
-                        growth: growth,
-                        profitGrowth: profitGrowth,
-                        beta: extraData.beta || 1.0,
-                        returns: extraData.returns, 
-                        type: 'STOCK' 
-                    };
-                    livePrices[sym] = data.price;
-                    renderCard(sym, data);
-                    return; 
                 }
+                return null;
+            };
+
+            const price = getRatio(['Current Price', 'Price']);
+            
+            if (price) {
+                // Parse Growth Section
+                let growth = 0; 
+                let profitGrowth = 0;
+                const idxSales = html.indexOf("Compounded Sales Growth");
+                if(idxSales > -1) {
+                    const sub = html.substring(idxSales, idxSales+1500);
+                    let m = sub.match(/3 Years:[\s\S]*?([0-9\.-]+)%/i);
+                    if(!m) m = sub.match(/5 Years:[\s\S]*?([0-9\.-]+)%/i); // Fallback to 5Y
+                    if(!m) m = sub.match(/TTM:[\s\S]*?([0-9\.-]+)%/i);     // Fallback to TTM
+                    growth = m ? parseFloat(m[1]) : 0;
+                }
+                
+                const idxProfit = html.indexOf("Compounded Profit Growth");
+                if(idxProfit > -1) {
+                    const sub = html.substring(idxProfit, idxProfit+1500);
+                    let m = sub.match(/3 Years:[\s\S]*?([0-9\.-]+)%/i);
+                    if(!m) m = sub.match(/5 Years:[\s\S]*?([0-9\.-]+)%/i);
+                    profitGrowth = m ? parseFloat(m[1]) : 0;
+                }
+
+                // Get Beta from Yahoo (Hybrid Fallback)
+                let extraData = {};
+                try {
+                    const yahooTicker = sym.endsWith('.NS') ? sym : `${sym}.NS`;
+                    const yData = await fetchYahooQuote(yahooTicker);
+                    if(yData) extraData = { beta: yData.beta, returns: yData.returns };
+                } catch(e) { console.log("Beta fetch failed"); }
+
+                const data = { 
+                    name: doc.querySelector('h1')?.innerText || sym, 
+                    price: price, 
+                    pe: getRatio(['Stock P/E', 'P/E']), 
+                    roe: getRatio(['Return on equity', 'ROE']),
+                    roce: getRatio(['Return on capital', 'ROCE']), 
+                    mcap: getRatio(['Market Cap']),
+                    opm: getRatio(['OPM']),
+                    growth: growth,
+                    profitGrowth: profitGrowth,
+                    beta: extraData.beta || 1.0,
+                    returns: extraData.returns, 
+                    type: 'STOCK' 
+                };
+                livePrices[sym] = data.price;
+                renderCard(sym, data);
+                return; 
             }
-        } catch (e) {}
+        } catch (e) {
+            console.warn("Screener failed, falling back to Google/Yahoo", e);
+        }
     }
 
-    // 2. Google Finance (Prioritized for ETFs or as fallback)
+    // 2. Google Finance (Fallback / ETFs)
     try {
         const gData = await fetchGoogleFinance(sym);
         if (gData) {
@@ -386,10 +436,12 @@ async function fetchYahooQuote(yahooSym) {
                 const years = months/12;
                 return ((Math.pow(curr/old, 1/years) - 1) * 100);
             };
-            const rawName = meta.symbol || yahooSym;
-            const cleanName = rawName.replace('.NS', '').replace('.BO', '');
+            
+            // Try to find Beta in the meta or fallback to 1.0
+            // Note: Chart API doesn't usually return Beta, but we keep this function simple for price/returns
+            
             return { 
-                name: cleanName, 
+                name: meta.symbol.replace('.NS', '').replace('.BO', ''), 
                 price: meta.regularMarketPrice, 
                 type: 'ETF', 
                 pe: null, 
@@ -404,6 +456,7 @@ async function fetchYahooQuote(yahooSym) {
             };
         }
     } catch(e) {
+        // Quote API Fallback - Better for Beta
         const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${yahooSym}`;
         const jsonStr = await fetchWithFallback(url);
         const json = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
