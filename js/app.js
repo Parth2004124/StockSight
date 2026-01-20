@@ -129,9 +129,12 @@ async function performCloudSync() {
         if (cloudData.status === 'error') throw new Error(cloudData.message);
 
         if (cloudData && Object.keys(cloudData).length > 0) {
-            portfolio = sanitizePortfolio(cloudData);
-            saveState(false); 
-            renderUI(); 
+            // MERGE STRATEGY: Prefer cloud data, but don't overwrite if cloud is empty and local is not
+            if (Object.keys(portfolio).length === 0 || confirm("Cloud data found. Overwrite local changes?")) {
+                 portfolio = sanitizePortfolio(cloudData);
+                 saveState(false); 
+                 renderUI();
+            }
         } else if (Object.keys(portfolio).length > 0) {
             saveState(true);
         }
