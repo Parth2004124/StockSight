@@ -13,7 +13,6 @@ let saveTimeout = null;
 let isOfflineMode = false;
 let activeRequests = 0;
 let portfolioAnalytics = { healthScore: 0, scoredValue: 0, totalValue: 0, allocation: {}, risk: {}, efficiency: [] };
-let stockyContext = { lastAsset: null, lastAllocation: null };
 
 // --- DATA PERSISTENCE ---
 
@@ -177,8 +176,6 @@ function renderUI() {
 
 // --- NETWORK & FETCHING ---
 
-// Reverted to ORIGINAL order: CodeTabs first. 
-// CodeTabs is significantly faster/more reliable for Screener direct HTML fetching.
 const PROXIES = [
     { url: (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`, type: 'text' },
     { url: (url) => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}&t=${Date.now()}`, type: 'json' },
@@ -191,7 +188,7 @@ async function fetchWithFallback(targetUrl) {
     for (const proxy of PROXIES) {
         try {
             const controller = new AbortController();
-            const id = setTimeout(() => controller.abort(), 10000); // 10s Timeout (Original)
+            const id = setTimeout(() => controller.abort(), 10000); 
             
             const res = await fetch(proxy.url(targetUrl), { signal: controller.signal });
             clearTimeout(id);
@@ -201,7 +198,6 @@ async function fetchWithFallback(targetUrl) {
             
             if(!content || content.length < 50) throw new Error("Empty/Blocked");
             
-            // Standard Validation
             if(targetUrl.includes('yahoo') && !content.includes('Chart') && !content.includes('quoteResponse') && !content.includes('QuoteSummaryStore') && !content.trim().startsWith('{')) throw new Error("Invalid Yahoo");
             
             return content;
@@ -210,7 +206,6 @@ async function fetchWithFallback(targetUrl) {
     throw lastError;
 }
 
-// Helper to find correct symbol using Yahoo's open Autocomplete
 async function resolveSymbolWithYahoo(query) {
     try {
         const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=1&newsCount=0`;
@@ -252,7 +247,6 @@ async function fetchMutualFund(code) {
     const url = `https://api.mfapi.in/mf/${code}`;
     let json;
     
-    // Direct First
     try {
         const res = await fetch(url);
         if(res.ok) {
@@ -260,7 +254,6 @@ async function fetchMutualFund(code) {
         }
     } catch(e) {}
 
-    // Proxy Fallback
     if (!json) {
         try {
             const jsonStr = await fetchWithFallback(url);
@@ -283,23 +276,37 @@ async function fetchMutualFund(code) {
 async function fetchStockOrETF(sym) {
     const isLikelyETF = ETF_KEYWORDS.some(k => sym.includes(k));
     
-    // --- SCREENER (STOCKS) ---
     if (!isLikelyETF) {
         try {
             let html;
             let finalSym = sym;
+            let searchNeeded = false;
 
-            // ONLY resolve if user types spaces (e.g., "HDFC BANK")
-            // Otherwise trust the user input (e.g., "TCS") to be fast
-            if (sym.includes(' ') || sym.includes('&')) {
-                const resolved = await resolveSymbolWithYahoo(sym);
-                if (resolved) finalSym = resolved;
+            try {
+                if (sym.includes(' ')) throw new Error("Space");
+                html = await fetchWithFallback(`https://www.screener.in/company/${sym}/consolidated/`);
+                if (html.includes("Page not found") || html.includes("could not be found")) {
+                    throw new Error("Soft 404");
+                }
+            } catch(e) {
+                searchNeeded = true;
             }
 
-            // DIRECT FETCH (Like Original App)
-            html = await fetchWithFallback(`https://www.screener.in/company/${finalSym}/consolidated/`);
+            if (searchNeeded) {
+                const searchRes = await fetchWithFallback(`https://www.screener.in/api/company/search/?q=${encodeURIComponent(sym)}`);
+                const searchJson = typeof searchRes === 'string' ? JSON.parse(searchRes) : searchRes;
+                
+                if (searchJson && searchJson.length > 0) {
+                    const relUrl = searchJson[0].url;
+                    finalSym = relUrl.split('/')[2]; 
+                    html = await fetchWithFallback(`https://www.screener.in${relUrl}consolidated/`);
+                } else {
+                    throw new Error("Search failed");
+                }
+            }
 
-            // PARSE
+            if (html.includes("human") && html.includes("verification")) throw new Error("Screener Blocked");
+
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
             const ratios = doc.getElementById('top-ratios');
@@ -334,7 +341,6 @@ async function fetchStockOrETF(sym) {
                         profitGrowth = m ? parseFloat(m[1]) : 0;
                     }
 
-                    // Background Beta Check
                     let extraData = {};
                     try {
                         const yData = await fetchYahooQuote(finalSym.endsWith('.NS') ? finalSym : `${finalSym}.NS`);
@@ -366,8 +372,6 @@ async function fetchStockOrETF(sym) {
     }
 
     // --- FALLBACKS ---
-    
-    // 2. Google Finance (ETFs preferred)
     try {
         const gData = await fetchGoogleFinance(sym);
         if (gData) {
@@ -377,7 +381,6 @@ async function fetchStockOrETF(sym) {
         }
     } catch (gErr) {}
 
-    // 3. Yahoo Finance (Last Resort)
     try {
         let targetSym = sym.endsWith('.NS') || sym.endsWith('.BO') ? sym : `${sym}.NS`;
         let data = await fetchYahooQuote(targetSym);
@@ -428,7 +431,7 @@ async function fetchYahooQuote(yahooSym) {
     } catch(e) {
         const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${yahooSym}`;
         const jsonStr = await fetchWithFallback(url);
-        const json = JSON.parse(jsonStr);
+        const json = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
         const res = json?.quoteResponse?.result?.[0];
         if(res) {
             return {
@@ -596,216 +599,6 @@ function switchTab(tab) {
     });
 
     if(tab === 'summary') renderSignalSummary();
-}
-
-// --- STOCKY INTELLIGENCE ---
-
-function handleStockyMessage() {
-    const input = document.getElementById('stocky-input');
-    const msg = input.value.trim();
-    if (!msg) return;
-    
-    addStockyMessage('user', msg);
-    input.value = '';
-    
-    setTimeout(() => {
-        const response = generateStockyResponse(msg);
-        addStockyMessage('bot', response);
-    }, 600);
-}
-
-function mapQueryToIntent(query) {
-    const q = query.toLowerCase();
-    const assets = Object.keys(stockAnalysis).filter(sym => q.includes(sym.toLowerCase()) || q.includes(stockAnalysis[sym].name.toLowerCase()));
-    
-    if (assets.length === 0 && stockyContext.lastAsset) {
-        if (q.includes('target') || q.includes('entry') || q.includes('stop') || q.includes('score') || q.includes('why') || q.includes('buy') || q.includes('sell') || q.includes('analysis') || q.includes('fundamental')) {
-            assets.push(stockyContext.lastAsset);
-        }
-    }
-    
-    if ((q.includes('compare') || q.includes(' vs ') || q.includes('better')) && assets.length === 1 && stockyContext.lastAsset && stockyContext.lastAsset !== assets[0]) {
-        assets.unshift(stockyContext.lastAsset);
-    }
-
-    if (assets.length > 0) {
-        stockyContext.lastAsset = assets[0]; 
-    }
-
-    if ((q.includes('compare') || q.includes('better') || q.includes(' vs ')) && assets.length >= 2) {
-        return { type: 'COMPARE', assets: assets.slice(0, 2) };
-    }
-
-    if (assets.length > 0 && (q.includes('explain') || q.includes('score') || q.includes('analysis') || q.includes('buy') || q.includes('sell') || q.includes('why') || assets.length === 1)) {
-        return { type: 'EXPLAIN', asset: assets[0] };
-    }
-
-    if (q.includes('health') || q.includes('summary') || q.includes('overview') || q.includes('score')) {
-        return { type: 'SUMMARY' };
-    }
-
-    if (q.includes('risk') || q.includes('concentrat') || q.includes('diversif') || q.includes('exposure')) {
-        return { type: 'RISK' };
-    }
-
-    const amtMatch = q.match(/(?:rs\.?|₹|inr)\s*(\d+(?:,\d+)*(?:\.\d+)?)\s*(k|l|cr|m|b)?/i) || q.match(/(\d+(?:,\d+)*(?:\.\d+)?)\s*(k|l|cr|m|b)/i) || q.match(/(?:allocate|have|invest)\s*(\d+(?:,\d+)*(?:\.\d+)?)/i);
-    
-    if (amtMatch) {
-        let val = parseFloat(amtMatch[1].replace(/,/g, ''));
-        const unit = (amtMatch[2] || '').toLowerCase();
-        if (unit === 'k') val *= 1000;
-        else if (unit === 'l') val *= 100000;
-        else if (unit === 'cr') val *= 10000000;
-        else if (unit === 'm') val *= 1000000;
-        
-        const reqAssets = assets.length > 0 ? assets : []; 
-        return { type: 'ALLOCATION_SIM', amount: val, assets: reqAssets };
-    }
-
-    if (stockyContext.lastAllocation && (q.includes('why') || q.includes('explain') || q.includes('reason')) && (q.includes('allocation') || q.includes('chose') || q.includes('this'))) {
-        return { type: 'EXPLAIN_ALLOCATION' };
-    }
-
-    if (q.includes('allocation') || q.includes('efficien') || q.includes('trap') || q.includes('size')) {
-        return { type: 'EFFICIENCY' };
-    }
-
-    return { type: 'UNSUPPORTED' };
-}
-
-function simulateCapitalAllocation(amount, specificAssets) {
-    let candidates = [];
-    
-    if (specificAssets.length > 0) {
-         candidates = specificAssets.map(sym => ({ sym, ...stockAnalysis[sym] })).filter(c => c.price > 0);
-    } else {
-         candidates = Object.entries(stockAnalysis)
-            .map(([sym, data]) => ({ sym, ...data }))
-            .filter(d => d.price > 0 && d.action === 'BUY NOW'); 
-         
-         if (candidates.length === 0) {
-             candidates = Object.entries(stockAnalysis)
-                .map(([sym, data]) => ({ sym, ...data }))
-                .filter(d => d.price > 0 && calculateFundamentalScore(d)?.total > 60);
-         }
-    }
-
-    if (candidates.length === 0) {
-        return "I couldn't find any high-conviction assets (Score > 60 or BUY signal) to simulate an allocation for right now.";
-    }
-
-    let totalScore = 0;
-    candidates = candidates.map(c => {
-        let fScore = calculateFundamentalScore(c);
-        if(fScore) fScore = normalizeFundamentalScore(fScore, c);
-        const score = fScore ? fScore.total : 50;
-        totalScore += score;
-        return { ...c, score };
-    });
-
-    let result = [];
-    let used = 0;
-    candidates.forEach(c => {
-        const weight = c.score / totalScore;
-        const allocAmt = amount * weight;
-        const qty = Math.floor(allocAmt / c.price);
-        const cost = qty * c.price;
-        if(qty > 0) {
-            result.push({ name: c.name, price: c.price, qty: qty, value: cost, weight: (weight*100).toFixed(1) });
-            used += cost;
-        }
-    });
-
-    if (result.length === 0) return "The capital amount is too small to buy even a single share of the selected assets.";
-
-    stockyContext.lastAllocation = {
-        topPicks: result.sort((a,b) => b.weight - a.weight).slice(0, 3),
-        strategy: specificAssets.length > 0 ? "Specific Selection" : "Top Conviction Picks"
-    };
-
-    let response = `You may take a look at the following allocation that almost adds up to ₹${amount.toLocaleString()} for further analysis consideration:\n\n`;
-    
-    response += `<table class="w-full text-xs border-collapse mb-2">
-        <thead><tr class="border-b border-gray-200 text-left"><th class="py-1">Asset</th><th>Qty</th><th>Value</th></tr></thead>
-        <tbody>`;
-    result.forEach(r => {
-        response += `<tr class="border-b border-gray-50"><td class="py-1">${r.name}</td><td>${r.qty}</td><td>₹${r.value.toLocaleString()}</td></tr>`;
-    });
-    response += `</tbody></table>`;
-    
-    response += `\nUnused Cash: ₹${(amount - used).toLocaleString()}`;
-    response += `\n\n<i class="text-[10px] text-gray-400">Note: Higher scores receive higher allocation weights. Not a recommendation.</i>`;
-    
-    return response;
-}
-
-function generateStockyResponse(query) {
-    const intent = mapQueryToIntent(query);
-
-    switch (intent.type) {
-        case 'SUMMARY':
-            const health = portfolioAnalytics.healthScore || 0;
-            let tone = "stable";
-            if (health > 65) tone = "strong";
-            if (health < 40) tone = "struggling";
-            return `According to the model, your portfolio's structural health is currently ${tone} with a composite score of ${health}. This score is a weighted average of the fundamental quality of your individual holdings.`;
-
-        case 'RISK':
-            const divScore = portfolioAnalytics.risk.divScore || 0;
-            const sectors = (portfolioAnalytics.risk.sectors || []).map(s => s[0]).join(', ');
-            const alerts = portfolioAnalytics.risk.alerts || [];
-            let reply = `Your diversification score sits at ${divScore}/100. `;
-            if (sectors) reply += `Structural data shows major exposure to ${sectors}. `;
-            if (alerts.length > 0) reply += `The system flags some concentration risks: ${alerts[0]}.`;
-            else reply += `The allocation looks balanced across sectors based on our standard risk thresholds.`;
-            return reply;
-
-        case 'EFFICIENCY':
-            const eff = portfolioAnalytics.efficiency || [];
-            const traps = eff.filter(e => e.type === 'bad');
-            if (traps.length > 0) {
-                return `I found some potential capital inefficiencies. Specifically, ${traps[0].text}. This suggests a large allocation in a structurally weak asset according to our scoring model.`;
-            }
-            return `Capital deployment looks efficient based on current metrics. I haven't flagged any major "Capital Traps" where high allocation meets low quality.`;
-            
-        case 'ALLOCATION_SIM':
-            return simulateCapitalAllocation(intent.amount, intent.assets);
-
-        case 'EXPLAIN_ALLOCATION':
-            const alloc = stockyContext.lastAllocation;
-            const names = alloc.topPicks.map(p => `${p.name}`).join(', ');
-            return `I used a score-weighted model based on ${alloc.strategy}. Assets with higher fundamental scores received proportionally more capital. For example, ${names} scored highest in your list, so they anchor the portfolio to maximize structural quality while minimizing risk.`;
-
-        case 'EXPLAIN':
-            const symbol = intent.asset;
-            const data = stockAnalysis[symbol];
-            if (!data) return "I can't access data for that symbol right now.";
-            return `Looking at ${data.name}, the system derives a ${data.action} signal. This is driven by ${data.explanation || 'structural factors'}, resulting in a conviction score that suggests ${data.action === 'BUY NOW' ? 'structural strength' : 'caution'}. ${data.levels ? `Key levels based on conviction: Entry/SL at ₹${(data.levels.sl || data.levels.entry || 0).toLocaleString()}.` : ''}`;
-
-        case 'COMPARE':
-            const [symA, symB] = intent.assets;
-            const d1 = stockAnalysis[symA];
-            const d2 = stockAnalysis[symB];
-            if (!d1 || !d2) return "I need valid data for both assets to compare them.";
-            
-            let s1 = calculateFundamentalScore(d1); if(s1) s1 = normalizeFundamentalScore(s1, d1);
-            let s2 = calculateFundamentalScore(d2); if(s2) s2 = normalizeFundamentalScore(s2, d2);
-            const score1 = s1 ? s1.total : '--';
-            const score2 = s2 ? s2.total : '--';
-
-            return `<div class="font-bold mb-1">Comparison: ${d1.name} vs ${d2.name}</div>
-            <table class="w-full text-xs border border-gray-200 rounded">
-                <tr class="bg-gray-50"><th class="p-1 text-left">Metric</th><th class="p-1 text-right">${d1.name.substr(0,4)}</th><th class="p-1 text-right">${d2.name.substr(0,4)}</th></tr>
-                <tr class="border-t"><td class="p-1">Score</td><td class="p-1 text-right font-bold">${score1}</td><td class="p-1 text-right font-bold">${score2}</td></tr>
-                <tr class="border-t"><td class="p-1">Signal</td><td class="p-1 text-right">${d1.action}</td><td class="p-1 text-right">${d2.action}</td></tr>
-                <tr class="border-t"><td class="p-1">Price</td><td class="p-1 text-right">₹${d1.price}</td><td class="p-1 text-right">₹${d2.price}</td></tr>
-            </table>
-            <div class="mt-2 text-[10px] italic">System favors ${d1.action === 'BUY NOW' && d2.action !== 'BUY NOW' ? d1.name : (d2.action === 'BUY NOW' && d1.action !== 'BUY NOW' ? d2.name : "neither definitively based on signal strength")}.</div>`;
-
-        case 'UNSUPPORTED':
-        default:
-            return `I'm tuned to analyze portfolio structure, risk, and scoring rules. I can't predict market movements or offer general financial advice. Try asking about "Portfolio Health", "Capital Efficiency", or "Explain [Stock]".`;
-    }
 }
 
 // Start App
