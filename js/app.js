@@ -108,7 +108,7 @@ async function initApp() {
         renderUI();
     } else {
         const el = document.getElementById('empty-watchlist');
-        if (el) el.innerHTML = "Initializing...";
+        if(el) el.innerHTML = "Initializing...";
     }
 
     await performCloudSync();
@@ -143,7 +143,7 @@ async function performCloudSync() {
         if(emptyState) emptyState.classList.add('hidden');
         if (Object.keys(portfolio).length === 0) {
             const el = document.getElementById('empty-watchlist');
-            if (el) el.innerHTML = "Offline Mode.<br>Add stocks locally.";
+            if(el) el.innerHTML = "Offline Mode.<br>Add stocks locally.";
         }
     }
 }
@@ -175,8 +175,10 @@ function renderUI() {
     calculateTotals();
 }
 
-// --- NETWORK & FETCHING (EXACTLY AS IN ORIGINAL APP) ---
+// --- NETWORK & FETCHING ---
 
+// Reverted to ORIGINAL order: CodeTabs first. 
+// CodeTabs is significantly faster/more reliable for Screener direct HTML fetching.
 const PROXIES = [
     { url: (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`, type: 'text' },
     { url: (url) => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}&t=${Date.now()}`, type: 'json' },
@@ -189,20 +191,26 @@ async function fetchWithFallback(targetUrl) {
     for (const proxy of PROXIES) {
         try {
             const controller = new AbortController();
-            const id = setTimeout(() => controller.abort(), 10000); 
+            const id = setTimeout(() => controller.abort(), 10000); // 10s Timeout (Original)
+            
             const res = await fetch(proxy.url(targetUrl), { signal: controller.signal });
             clearTimeout(id);
+            
             if(!res.ok) throw new Error(`HTTP ${res.status}`);
             let content = proxy.type === 'json' ? (await res.json()).contents : await res.text();
+            
             if(!content || content.length < 50) throw new Error("Empty/Blocked");
-            if(targetUrl.includes('yahoo') && !content.trim().startsWith('{') && !content.includes('QuoteSummaryStore')) throw new Error("Invalid Yahoo");
+            
+            // Standard Validation
+            if(targetUrl.includes('yahoo') && !content.includes('Chart') && !content.includes('quoteResponse') && !content.includes('QuoteSummaryStore') && !content.trim().startsWith('{')) throw new Error("Invalid Yahoo");
+            
             return content;
         } catch(e) { lastError = e; }
     }
     throw lastError;
 }
 
-// Helper to find correct symbol using Yahoo's open Autocomplete (Added as this was a key fix discussed)
+// Helper to find correct symbol using Yahoo's open Autocomplete
 async function resolveSymbolWithYahoo(query) {
     try {
         const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=1&newsCount=0`;
@@ -210,12 +218,9 @@ async function resolveSymbolWithYahoo(query) {
         const json = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
         if (json && json.quotes && json.quotes.length > 0) {
             const sym = json.quotes[0].symbol;
-            // Clean it for Screener (remove .NS, .BO)
             return sym.replace('.NS', '').replace('.BO', '');
         }
-    } catch(e) {
-        console.warn("Yahoo resolution failed", e);
-    }
+    } catch(e) {}
     return null;
 }
 
@@ -226,7 +231,6 @@ async function fetchAsset(input) {
     activeRequests++;
     updateReqCount();
     
-    // Clean Ticker
     let sym = input.toUpperCase().split('.')[0].trim();
     
     try {
@@ -246,26 +250,24 @@ async function fetchAsset(input) {
 
 async function fetchMutualFund(code) {
     const url = `https://api.mfapi.in/mf/${code}`;
+    let json;
     
-    // Try Direct First (Original behavior often tries direct first for some APIs)
+    // Direct First
     try {
         const res = await fetch(url);
         if(res.ok) {
-            const json = await res.json();
-            processMFData(code, json);
-            return;
+            json = await res.json();
         }
     } catch(e) {}
 
-    // Fallback to Proxy
-    try {
-        const jsonStr = await fetchWithFallback(url);
-        const json = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
-        processMFData(code, json);
-    } catch(e) { throw new Error("MF Not Found"); }
-}
+    // Proxy Fallback
+    if (!json) {
+        try {
+            const jsonStr = await fetchWithFallback(url);
+            json = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
+        } catch(e) { throw new Error("MF Not Found"); }
+    }
 
-function processMFData(code, json) {
     if (!json || !json.data) throw new Error("Invalid Data");
     const data = { 
         name: json.meta.scheme_name, 
@@ -281,40 +283,25 @@ function processMFData(code, json) {
 async function fetchStockOrETF(sym) {
     const isLikelyETF = ETF_KEYWORDS.some(k => sym.includes(k));
     
+    // --- SCREENER (STOCKS) ---
     if (!isLikelyETF) {
-        // --- SCREENER FETCH LOGIC ---
         try {
             let html;
             let finalSym = sym;
 
-            // Resolve Symbol if needed (Spaces/Special Chars) - keeping this optimization
-            if (sym.includes(' ') || sym.includes('&') || sym.length > 9) {
+            // ONLY resolve if user types spaces (e.g., "HDFC BANK")
+            // Otherwise trust the user input (e.g., "TCS") to be fast
+            if (sym.includes(' ') || sym.includes('&')) {
                 const resolved = await resolveSymbolWithYahoo(sym);
                 if (resolved) finalSym = resolved;
             }
 
-            // Fetch Screener Data (Try Direct URL First)
-            try {
-                html = await fetchWithFallback(`https://www.screener.in/company/${finalSym}/consolidated/`);
-            } catch(e) {
-                // If direct failed, try resolving via Yahoo (if not done) then retry
-                if (finalSym === sym) {
-                    const resolved = await resolveSymbolWithYahoo(sym);
-                    if (resolved && resolved !== sym) {
-                        finalSym = resolved;
-                        html = await fetchWithFallback(`https://www.screener.in/company/${finalSym}/consolidated/`);
-                    } else throw e;
-                } else throw e;
-            }
+            // DIRECT FETCH (Like Original App)
+            html = await fetchWithFallback(`https://www.screener.in/company/${finalSym}/consolidated/`);
 
-            // Check for Blocking
-            if (html.includes("human") && html.includes("verification")) throw new Error("Screener Blocked");
-
-            // PARSE DATA
+            // PARSE
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
-            
-            // Original app's robust parsing logic for top-ratios
             const ratios = doc.getElementById('top-ratios');
             
             if (ratios) {
@@ -328,15 +315,14 @@ async function fetchStockOrETF(sym) {
                 const price = getVal('Current Price');
                 
                 if (price) {
-                    // Growth parsing
                     let growth = 0; 
                     let profitGrowth = 0;
                     const idxSales = html.indexOf("Compounded Sales Growth");
                     if(idxSales > -1) {
                         const sub = html.substring(idxSales, idxSales+1500);
                         let m = sub.match(/3 Years:[\s\S]*?([0-9\.-]+)\s?%/i);
-                        if(!m) m = sub.match(/5 Years:[\s\S]*?([0-9\.-]+)\s?%/i); // Fallback to 5Y
-                        if(!m) m = sub.match(/TTM:[\s\S]*?([0-9\.-]+)\s?%/i);     // Fallback to TTM
+                        if(!m) m = sub.match(/5 Years:[\s\S]*?([0-9\.-]+)\s?%/i);
+                        if(!m) m = sub.match(/TTM:[\s\S]*?([0-9\.-]+)\s?%/i);
                         growth = m ? parseFloat(m[1]) : 0;
                     }
                     
@@ -348,15 +334,12 @@ async function fetchStockOrETF(sym) {
                         profitGrowth = m ? parseFloat(m[1]) : 0;
                     }
 
-                    // Get Beta from Yahoo (Hybrid Fallback)
+                    // Background Beta Check
                     let extraData = {};
                     try {
-                        const yahooTicker = finalSym.endsWith('.NS') ? finalSym : `${finalSym}.NS`;
-                        const yData = await fetchYahooQuote(yahooTicker);
+                        const yData = await fetchYahooQuote(finalSym.endsWith('.NS') ? finalSym : `${finalSym}.NS`);
                         if(yData) extraData = { beta: yData.beta, returns: yData.returns };
-                    } catch(e) { console.log("Beta fetch failed"); }
-
-                    let opm = getVal('OPM %') || 0;
+                    } catch(e) {}
 
                     const data = { 
                         name: doc.querySelector('h1')?.innerText || finalSym, 
@@ -365,7 +348,7 @@ async function fetchStockOrETF(sym) {
                         roe: getVal('ROE'),
                         roce: getVal('ROCE'), 
                         mcap: getVal('Market Cap'),
-                        opm: opm,
+                        opm: getVal('OPM') || 0,
                         growth: growth,
                         profitGrowth: profitGrowth,
                         beta: extraData.beta || 1.0,
@@ -378,13 +361,23 @@ async function fetchStockOrETF(sym) {
                 }
             }
         } catch (e) {
-            console.warn("Screener failed, falling back to Google/Yahoo", e);
+            console.warn("Screener failed, trying Google/Yahoo", e);
         }
     }
 
-    // --- FALLBACKS (Google/Yahoo) ---
+    // --- FALLBACKS ---
     
-    // Yahoo Finance (Prioritized as secondary fallback in original logic often)
+    // 2. Google Finance (ETFs preferred)
+    try {
+        const gData = await fetchGoogleFinance(sym);
+        if (gData) {
+            livePrices[sym] = gData.price;
+            renderCard(sym, gData);
+            return;
+        }
+    } catch (gErr) {}
+
+    // 3. Yahoo Finance (Last Resort)
     try {
         let targetSym = sym.endsWith('.NS') || sym.endsWith('.BO') ? sym : `${sym}.NS`;
         let data = await fetchYahooQuote(targetSym);
@@ -395,16 +388,6 @@ async function fetchStockOrETF(sym) {
             return;
         }
     } catch (yErr) {}
-
-    // Google Finance
-    try {
-        const gData = await fetchGoogleFinance(sym);
-        if (gData) {
-            livePrices[sym] = gData.price;
-            renderCard(sym, gData);
-            return;
-        }
-    } catch (gErr) {}
 
     throw new Error("Asset not found");
 }
@@ -443,10 +426,9 @@ async function fetchYahooQuote(yahooSym) {
             };
         }
     } catch(e) {
-        // Try Quote API
         const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${yahooSym}`;
         const jsonStr = await fetchWithFallback(url);
-        const json = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
+        const json = JSON.parse(jsonStr);
         const res = json?.quoteResponse?.result?.[0];
         if(res) {
             return {
