@@ -49,7 +49,6 @@ function cleanTicker(sym) {
 }
 
 function getDisplayName(sym) {
-    // Relies on global stockAnalysis if available, otherwise cleans ticker
     if (typeof stockAnalysis !== 'undefined' && stockAnalysis[sym]) {
         return stockAnalysis[sym].name || cleanTicker(sym);
     }
@@ -132,7 +131,6 @@ function calculateFundamentalScore(data) {
         const ret1y = data.returns?.r1y || 0;
         const name = (data.name || '').toUpperCase();
 
-        // TATA MOTORS FIX: Tighten financial detection to exclude manufacturing giants
         const isAutoOrPower = name.includes("MOTORS") || name.includes("AUTO") || name.includes("POWER") || name.includes("ENERGY") || name.includes("STEEL");
         const isFinancial = !isAutoOrPower && ((roce < 12 && roe > 15) || (name.includes("FINANCE") || name.includes("BANK") || name.includes("CAPITAL") || name.includes("HOLDINGS")));
         
@@ -250,11 +248,13 @@ function normalizeFundamentalScore(fScore, data) {
     const industry = detectIndustry(data);
     const profile = INDUSTRY_PROFILES[industry] || INDUSTRY_PROFILES['GENERAL'];
 
+    // FIX: Instead of returning 0, apply a 20% penalty if a required metric is missing.
+    // This preserves the aggregate score (55) but penalizes it slightly instead of wiping it out.
     for (let metric of profile.required || []) {
         if (data[metric] === null || data[metric] === undefined || data[metric] === 0) {
-                fScore.total = 0;
-                fScore.explanation = "Data Insufficient (Ind)";
-                return fScore;
+                fScore.total = Math.max(0, fScore.total - 20); // Penalty instead of Reset
+                fScore.explanation = fScore.explanation ? `${fScore.explanation} (Data Partial)` : "Data Partial";
+                // Don't return yet, continue weighting
         }
     }
 
@@ -281,8 +281,6 @@ function normalizeFundamentalScore(fScore, data) {
 // --- PORTFOLIO & RISK AGGREGATION ---
 
 function calculatePortfolioAggregates() {
-    // Note: This accesses global variables defined in main app file (portfolio, livePrices, etc.)
-    // Ensure this function is called only after data is loaded.
     if (typeof portfolio === 'undefined' || typeof livePrices === 'undefined') return;
 
     let totalVal = 0;
@@ -297,7 +295,6 @@ function calculatePortfolioAggregates() {
     let weightedBetaSum = 0;
     let betaEquityVal = 0;
     
-    // Reset analytics object
     portfolioAnalytics = { healthScore: 0, scoredValue: 0, totalValue: 0, allocation: {}, risk: { alerts: [], sectors: {}, divScore: 100, sensitivity: 'Moderate' }, efficiency: [] };
 
     Object.keys(portfolio).forEach(sym => {
