@@ -191,9 +191,11 @@ async function fetchWithFallback(targetUrl) {
             const res = await fetch(proxy.url(targetUrl));
             if(!res.ok) throw new Error(`HTTP ${res.status}`);
             let content = proxy.type === 'json' ? (await res.json()).contents : await res.text();
-            if(!content || content.length < 50) throw new Error("Empty/Blocked");
-            // Relaxed Yahoo check to be more robust
+            if(!content) throw new Error("Empty/Blocked"); // Removed length check for Search API compatibility
+            
+            // Relaxed Yahoo check
             if(targetUrl.includes('yahoo') && !content.includes('Chart') && !content.includes('quoteResponse') && !content.includes('QuoteSummaryStore') && !content.trim().startsWith('{')) throw new Error("Invalid Yahoo");
+            
             return content;
         } catch(e) { lastError = e; }
     }
@@ -206,12 +208,16 @@ async function fetchAsset(input) {
 
     activeRequests++;
     updateReqCount();
-    const sym = input.toUpperCase();
+    
+    let sym = input.toUpperCase();
+    
     try {
         if (/^\d{5,6}$/.test(sym)) await fetchMutualFund(sym);
         else await fetchStockOrETF(sym);
+        
         const card = document.getElementById(`card-${sym}`);
         if(card) card.classList.remove('updating');
+        
     } catch(e) {
         renderErrorCard(sym, e.message);
     } finally {
@@ -261,7 +267,28 @@ async function fetchStockOrETF(sym) {
     // 1. Screener for Stocks (if not ETF keyword)
     if (!isLikelyETF) {
         try {
-            const html = await fetchWithFallback(`https://www.screener.in/company/${sym}/consolidated/`);
+            let html;
+            try {
+                // OPTIMIZATION: If the ticker contains a space (e.g. "HDFC BANK"), 
+                // skip direct fetch to avoid waiting for 404s/timeouts and go straight to search.
+                if (sym.includes(' ')) throw new Error("Space in ticker, use search");
+
+                // Try direct access first (Works for INFOSYS, TCS, etc)
+                html = await fetchWithFallback(`https://www.screener.in/company/${sym}/consolidated/`);
+            } catch (directErr) {
+                // If direct fails or has space, SEARCH Screener API (Works for HUL, HDFC, L&T)
+                const searchRes = await fetchWithFallback(`https://www.screener.in/api/company/search/?q=${encodeURIComponent(sym)}`);
+                const searchJson = typeof searchRes === 'string' ? JSON.parse(searchRes) : searchRes;
+                
+                if (searchJson && searchJson.length > 0) {
+                    // Extract the correct URL from search result (e.g., /company/HINDUNILVR/)
+                    const correctUrl = searchJson[0].url;
+                    html = await fetchWithFallback(`https://www.screener.in${correctUrl}consolidated/`);
+                } else {
+                    throw directErr; // Throw original error if search yields nothing
+                }
+            }
+
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
             const ratios = doc.getElementById('top-ratios');
