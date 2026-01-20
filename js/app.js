@@ -12,6 +12,7 @@ let activeTab = 'portfolio';
 let saveTimeout = null;
 let isOfflineMode = false;
 let activeRequests = 0;
+// NOTE: portfolioAnalytics is shared with stocky.js
 let portfolioAnalytics = { healthScore: 0, scoredValue: 0, totalValue: 0, allocation: {}, risk: {}, efficiency: [] };
 
 // --- DATA PERSISTENCE ---
@@ -206,6 +207,7 @@ async function fetchWithFallback(targetUrl) {
     throw lastError;
 }
 
+// Helper to find correct symbol using Yahoo's open Autocomplete
 async function resolveSymbolWithYahoo(query) {
     try {
         const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=1&newsCount=0`;
@@ -273,6 +275,7 @@ async function fetchMutualFund(code) {
     renderCard(code, data);
 }
 
+// ROBUST FETCH FUNCTION (Fixed for Score/OPM)
 async function fetchStockOrETF(sym) {
     const isLikelyETF = ETF_KEYWORDS.some(k => sym.includes(k));
     
@@ -282,12 +285,14 @@ async function fetchStockOrETF(sym) {
             let finalSym = sym;
             let searchNeeded = false;
 
+            if (sym.includes(' ') || sym.includes('&') || sym.length > 9) {
+                const resolved = await resolveSymbolWithYahoo(sym);
+                if (resolved) finalSym = resolved;
+            }
+
             try {
-                if (sym.includes(' ')) throw new Error("Space");
-                html = await fetchWithFallback(`https://www.screener.in/company/${sym}/consolidated/`);
-                if (html.includes("Page not found") || html.includes("could not be found")) {
-                    throw new Error("Soft 404");
-                }
+                html = await fetchWithFallback(`https://www.screener.in/company/${finalSym}/consolidated/`);
+                if (html.includes("Page not found") || html.includes("could not be found")) throw new Error("Soft 404");
             } catch(e) {
                 searchNeeded = true;
             }
@@ -295,7 +300,6 @@ async function fetchStockOrETF(sym) {
             if (searchNeeded) {
                 const searchRes = await fetchWithFallback(`https://www.screener.in/api/company/search/?q=${encodeURIComponent(sym)}`);
                 const searchJson = typeof searchRes === 'string' ? JSON.parse(searchRes) : searchRes;
-                
                 if (searchJson && searchJson.length > 0) {
                     const relUrl = searchJson[0].url;
                     finalSym = relUrl.split('/')[2]; 
@@ -322,24 +326,27 @@ async function fetchStockOrETF(sym) {
                 const price = getVal('Current Price');
                 
                 if (price) {
-                    let growth = 0; 
-                    let profitGrowth = 0;
-                    const idxSales = html.indexOf("Compounded Sales Growth");
-                    if(idxSales > -1) {
-                        const sub = html.substring(idxSales, idxSales+1500);
-                        let m = sub.match(/3 Years:[\s\S]*?([0-9\.-]+)\s?%/i);
-                        if(!m) m = sub.match(/5 Years:[\s\S]*?([0-9\.-]+)\s?%/i);
-                        if(!m) m = sub.match(/TTM:[\s\S]*?([0-9\.-]+)\s?%/i);
-                        growth = m ? parseFloat(m[1]) : 0;
+                    // --- ROBUST PARSING HELPERS (OPM & Growth Fixes) ---
+                    const extractGrowth = (fullHtml, sectionTitle) => {
+                        const idx = fullHtml.indexOf(sectionTitle);
+                        if (idx === -1) return 0;
+                        const snippet = fullHtml.substring(idx, idx + 2000);
+                        let m = snippet.match(/3\s*Years:[\s\S]*?([0-9\.-]+)\s?%/i);
+                        if (!m) m = snippet.match(/5\s*Years:[\s\S]*?([0-9\.-]+)\s?%/i);
+                        if (!m) m = snippet.match(/TTM:[\s\S]*?([0-9\.-]+)\s?%/i);
+                        return m ? parseFloat(m[1]) : 0;
+                    };
+
+                    // Robust OPM Parsing
+                    let opm = getVal('OPM %') || getVal('OPM');
+                    if (opm === null || opm === 0) {
+                        const opmRegex = /OPM\s*%?[\s\S]{0,50}?(\d{1,3}(\.\d{1,2})?)%/i;
+                        const m = html.match(opmRegex);
+                        if (m) opm = parseFloat(m[1]);
                     }
-                    
-                    const idxProfit = html.indexOf("Compounded Profit Growth");
-                    if(idxProfit > -1) {
-                        const sub = html.substring(idxProfit, idxProfit+1500);
-                        let m = sub.match(/3 Years:[\s\S]*?([0-9\.-]+)\s?%/i);
-                        if(!m) m = sub.match(/5 Years:[\s\S]*?([0-9\.-]+)\s?%/i);
-                        profitGrowth = m ? parseFloat(m[1]) : 0;
-                    }
+
+                    let growth = extractGrowth(html, "Compounded Sales Growth");
+                    let profitGrowth = extractGrowth(html, "Compounded Profit Growth");
 
                     let extraData = {};
                     try {
@@ -354,7 +361,7 @@ async function fetchStockOrETF(sym) {
                         roe: getVal('ROE'),
                         roce: getVal('ROCE'), 
                         mcap: getVal('Market Cap'),
-                        opm: getVal('OPM') || 0,
+                        opm: opm || 0,
                         growth: growth,
                         profitGrowth: profitGrowth,
                         beta: extraData.beta || 1.0,
@@ -367,11 +374,10 @@ async function fetchStockOrETF(sym) {
                 }
             }
         } catch (e) {
-            console.warn("Screener failed, trying Google/Yahoo", e);
+            console.warn("Screener failed", e);
         }
     }
 
-    // --- FALLBACKS ---
     try {
         const gData = await fetchGoogleFinance(sym);
         if (gData) {
@@ -599,6 +605,11 @@ function switchTab(tab) {
     });
 
     if(tab === 'summary') renderSignalSummary();
+}
+
+function updateReqCount() {
+    const el = document.getElementById('requestCounter');
+    if(el) el.style.display = activeRequests > 0 ? 'block' : 'none';
 }
 
 // Start App
