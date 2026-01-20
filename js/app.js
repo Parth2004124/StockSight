@@ -108,7 +108,7 @@ async function initApp() {
         renderUI();
     } else {
         const el = document.getElementById('empty-watchlist');
-        if(el) el.innerHTML = "Initializing...";
+        if (el) el.innerHTML = "Initializing...";
     }
 
     await performCloudSync();
@@ -143,7 +143,7 @@ async function performCloudSync() {
         if(emptyState) emptyState.classList.add('hidden');
         if (Object.keys(portfolio).length === 0) {
             const el = document.getElementById('empty-watchlist');
-            if(el) el.innerHTML = "Offline Mode.<br>Add stocks locally.";
+            if (el) el.innerHTML = "Offline Mode.<br>Add stocks locally.";
         }
     }
 }
@@ -175,7 +175,7 @@ function renderUI() {
     calculateTotals();
 }
 
-// --- NETWORK & FETCHING ---
+// --- NETWORK & FETCHING (EXACTLY AS IN ORIGINAL APP) ---
 
 const PROXIES = [
     { url: (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`, type: 'text' },
@@ -189,24 +189,20 @@ async function fetchWithFallback(targetUrl) {
     for (const proxy of PROXIES) {
         try {
             const controller = new AbortController();
-            const id = setTimeout(() => controller.abort(), 8000); // 8s Timeout
-            
+            const id = setTimeout(() => controller.abort(), 10000); 
             const res = await fetch(proxy.url(targetUrl), { signal: controller.signal });
             clearTimeout(id);
-            
             if(!res.ok) throw new Error(`HTTP ${res.status}`);
             let content = proxy.type === 'json' ? (await res.json()).contents : await res.text();
             if(!content || content.length < 50) throw new Error("Empty/Blocked");
-            
-            if(targetUrl.includes('yahoo') && !content.includes('Chart') && !content.includes('quoteResponse') && !content.includes('QuoteSummaryStore') && !content.trim().startsWith('{')) throw new Error("Invalid Yahoo");
-            
+            if(targetUrl.includes('yahoo') && !content.trim().startsWith('{') && !content.includes('QuoteSummaryStore')) throw new Error("Invalid Yahoo");
             return content;
         } catch(e) { lastError = e; }
     }
     throw lastError;
 }
 
-// Helper to find correct symbol using Yahoo's open Autocomplete
+// Helper to find correct symbol using Yahoo's open Autocomplete (Added as this was a key fix discussed)
 async function resolveSymbolWithYahoo(query) {
     try {
         const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=1&newsCount=0`;
@@ -230,7 +226,7 @@ async function fetchAsset(input) {
     activeRequests++;
     updateReqCount();
     
-    // Step 1: Clean Ticker Logic from your script
+    // Clean Ticker
     let sym = input.toUpperCase().split('.')[0].trim();
     
     try {
@@ -250,26 +246,27 @@ async function fetchAsset(input) {
 
 async function fetchMutualFund(code) {
     const url = `https://api.mfapi.in/mf/${code}`;
-    let json;
     
+    // Try Direct First (Original behavior often tries direct first for some APIs)
     try {
         const res = await fetch(url);
-        if (res.ok) {
-            json = await res.json();
-        } else {
-            throw new Error("Direct MF Failed");
+        if(res.ok) {
+            const json = await res.json();
+            processMFData(code, json);
+            return;
         }
-    } catch(e) {
-        try {
-            const jsonStr = await fetchWithFallback(url);
-            json = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
-        } catch(proxyErr) {
-            throw new Error("MF Not Found");
-        }
-    }
+    } catch(e) {}
 
-    if (!json || !json.data || !json.meta) throw new Error("Invalid MF Data");
+    // Fallback to Proxy
+    try {
+        const jsonStr = await fetchWithFallback(url);
+        const json = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
+        processMFData(code, json);
+    } catch(e) { throw new Error("MF Not Found"); }
+}
 
+function processMFData(code, json) {
+    if (!json || !json.data) throw new Error("Invalid Data");
     const data = { 
         name: json.meta.scheme_name, 
         price: parseFloat(json.data[0].nav), 
@@ -284,126 +281,110 @@ async function fetchMutualFund(code) {
 async function fetchStockOrETF(sym) {
     const isLikelyETF = ETF_KEYWORDS.some(k => sym.includes(k));
     
-    // --- HYBRID FETCH STRATEGY ---
-    
-    // 1. Try Screener (Main Source)
     if (!isLikelyETF) {
+        // --- SCREENER FETCH LOGIC ---
         try {
             let html;
-            let usedResolvedSym = false;
+            let finalSym = sym;
 
-            try {
-                // If contains space or weird chars, resolve first via Yahoo
-                if (sym.includes(' ') || sym.includes('&')) {
-                    const resolved = await resolveSymbolWithYahoo(sym);
-                    if (resolved) {
-                        sym = resolved;
-                        usedResolvedSym = true;
-                    }
-                }
-
-                // Direct Screener URL using clean ticker
-                html = await fetchWithFallback(`https://www.screener.in/company/${sym}/consolidated/`);
-                
-            } catch (directErr) {
-                // If direct access failed, try resolving if we haven't already
-                if (!usedResolvedSym) {
-                    const resolved = await resolveSymbolWithYahoo(sym);
-                    if (resolved && resolved !== sym) {
-                         sym = resolved;
-                         html = await fetchWithFallback(`https://www.screener.in/company/${sym}/consolidated/`);
-                    } else {
-                        throw directErr;
-                    }
-                } else {
-                    throw directErr;
-                }
+            // Resolve Symbol if needed (Spaces/Special Chars) - keeping this optimization
+            if (sym.includes(' ') || sym.includes('&') || sym.length > 9) {
+                const resolved = await resolveSymbolWithYahoo(sym);
+                if (resolved) finalSym = resolved;
             }
 
+            // Fetch Screener Data (Try Direct URL First)
+            try {
+                html = await fetchWithFallback(`https://www.screener.in/company/${finalSym}/consolidated/`);
+            } catch(e) {
+                // If direct failed, try resolving via Yahoo (if not done) then retry
+                if (finalSym === sym) {
+                    const resolved = await resolveSymbolWithYahoo(sym);
+                    if (resolved && resolved !== sym) {
+                        finalSym = resolved;
+                        html = await fetchWithFallback(`https://www.screener.in/company/${finalSym}/consolidated/`);
+                    } else throw e;
+                } else throw e;
+            }
+
+            // Check for Blocking
             if (html.includes("human") && html.includes("verification")) throw new Error("Screener Blocked");
 
-            // PARSE DATA (Logic adapted from your script)
+            // PARSE DATA
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
-            const ratioList = doc.querySelectorAll('li[class*="flex"]'); // Flexible selector for ratio items
             
-            const getRatio = (keywords) => {
-                const keys = Array.isArray(keywords) ? keywords : [keywords];
-                for (let li of ratioList) {
-                    const text = li.innerText.toLowerCase();
-                    if (keys.some(k => text.includes(k.toLowerCase()))) {
-                        const num = li.querySelector('.number');
-                        return num ? parseFloat(num.innerText.replace(/,/g, '')) : null;
+            // Original app's robust parsing logic for top-ratios
+            const ratios = doc.getElementById('top-ratios');
+            
+            if (ratios) {
+                const getVal = (txt) => {
+                    for(let li of ratios.querySelectorAll('li')) {
+                        if(li.innerText.toLowerCase().includes(txt.toLowerCase())) return parseFloat(li.querySelector('.number')?.innerText.replace(/,/g,'') || 0);
                     }
-                }
-                return null;
-            };
-
-            const price = getRatio(['Current Price', 'Price']);
-            
-            if (price) {
-                // Parse Growth Section
-                let growth = 0; 
-                let profitGrowth = 0;
-                const idxSales = html.indexOf("Compounded Sales Growth");
-                if(idxSales > -1) {
-                    const sub = html.substring(idxSales, idxSales+1500);
-                    let m = sub.match(/3 Years:[\s\S]*?([0-9\.-]+)%/i);
-                    if(!m) m = sub.match(/5 Years:[\s\S]*?([0-9\.-]+)%/i); // Fallback to 5Y
-                    if(!m) m = sub.match(/TTM:[\s\S]*?([0-9\.-]+)%/i);     // Fallback to TTM
-                    growth = m ? parseFloat(m[1]) : 0;
-                }
-                
-                const idxProfit = html.indexOf("Compounded Profit Growth");
-                if(idxProfit > -1) {
-                    const sub = html.substring(idxProfit, idxProfit+1500);
-                    let m = sub.match(/3 Years:[\s\S]*?([0-9\.-]+)%/i);
-                    if(!m) m = sub.match(/5 Years:[\s\S]*?([0-9\.-]+)%/i);
-                    profitGrowth = m ? parseFloat(m[1]) : 0;
-                }
-
-                // Get Beta from Yahoo (Hybrid Fallback)
-                let extraData = {};
-                try {
-                    const yahooTicker = sym.endsWith('.NS') ? sym : `${sym}.NS`;
-                    const yData = await fetchYahooQuote(yahooTicker);
-                    if(yData) extraData = { beta: yData.beta, returns: yData.returns };
-                } catch(e) { console.log("Beta fetch failed"); }
-
-                const data = { 
-                    name: doc.querySelector('h1')?.innerText || sym, 
-                    price: price, 
-                    pe: getRatio(['Stock P/E', 'P/E']), 
-                    roe: getRatio(['Return on equity', 'ROE']),
-                    roce: getRatio(['Return on capital', 'ROCE']), 
-                    mcap: getRatio(['Market Cap']),
-                    opm: getRatio(['OPM']),
-                    growth: growth,
-                    profitGrowth: profitGrowth,
-                    beta: extraData.beta || 1.0,
-                    returns: extraData.returns, 
-                    type: 'STOCK' 
+                    return null;
                 };
-                livePrices[sym] = data.price;
-                renderCard(sym, data);
-                return; 
+                
+                const price = getVal('Current Price');
+                
+                if (price) {
+                    // Growth parsing
+                    let growth = 0; 
+                    let profitGrowth = 0;
+                    const idxSales = html.indexOf("Compounded Sales Growth");
+                    if(idxSales > -1) {
+                        const sub = html.substring(idxSales, idxSales+1500);
+                        let m = sub.match(/3 Years:[\s\S]*?([0-9\.-]+)\s?%/i);
+                        if(!m) m = sub.match(/5 Years:[\s\S]*?([0-9\.-]+)\s?%/i); // Fallback to 5Y
+                        if(!m) m = sub.match(/TTM:[\s\S]*?([0-9\.-]+)\s?%/i);     // Fallback to TTM
+                        growth = m ? parseFloat(m[1]) : 0;
+                    }
+                    
+                    const idxProfit = html.indexOf("Compounded Profit Growth");
+                    if(idxProfit > -1) {
+                        const sub = html.substring(idxProfit, idxProfit+1500);
+                        let m = sub.match(/3 Years:[\s\S]*?([0-9\.-]+)\s?%/i);
+                        if(!m) m = sub.match(/5 Years:[\s\S]*?([0-9\.-]+)\s?%/i);
+                        profitGrowth = m ? parseFloat(m[1]) : 0;
+                    }
+
+                    // Get Beta from Yahoo (Hybrid Fallback)
+                    let extraData = {};
+                    try {
+                        const yahooTicker = finalSym.endsWith('.NS') ? finalSym : `${finalSym}.NS`;
+                        const yData = await fetchYahooQuote(yahooTicker);
+                        if(yData) extraData = { beta: yData.beta, returns: yData.returns };
+                    } catch(e) { console.log("Beta fetch failed"); }
+
+                    let opm = getVal('OPM %') || 0;
+
+                    const data = { 
+                        name: doc.querySelector('h1')?.innerText || finalSym, 
+                        price: price, 
+                        pe: getVal('Stock P/E'), 
+                        roe: getVal('ROE'),
+                        roce: getVal('ROCE'), 
+                        mcap: getVal('Market Cap'),
+                        opm: opm,
+                        growth: growth,
+                        profitGrowth: profitGrowth,
+                        beta: extraData.beta || 1.0,
+                        returns: extraData.returns, 
+                        type: 'STOCK' 
+                    };
+                    livePrices[sym] = data.price;
+                    renderCard(sym, data);
+                    return; 
+                }
             }
         } catch (e) {
             console.warn("Screener failed, falling back to Google/Yahoo", e);
         }
     }
 
-    // 2. Google Finance (Fallback / ETFs)
-    try {
-        const gData = await fetchGoogleFinance(sym);
-        if (gData) {
-            livePrices[sym] = gData.price;
-            renderCard(sym, gData);
-            return;
-        }
-    } catch (gErr) {}
-
-    // 3. Yahoo Finance (Last Resort)
+    // --- FALLBACKS (Google/Yahoo) ---
+    
+    // Yahoo Finance (Prioritized as secondary fallback in original logic often)
     try {
         let targetSym = sym.endsWith('.NS') || sym.endsWith('.BO') ? sym : `${sym}.NS`;
         let data = await fetchYahooQuote(targetSym);
@@ -415,6 +396,16 @@ async function fetchStockOrETF(sym) {
         }
     } catch (yErr) {}
 
+    // Google Finance
+    try {
+        const gData = await fetchGoogleFinance(sym);
+        if (gData) {
+            livePrices[sym] = gData.price;
+            renderCard(sym, gData);
+            return;
+        }
+    } catch (gErr) {}
+
     throw new Error("Asset not found");
 }
 
@@ -422,7 +413,7 @@ async function fetchYahooQuote(yahooSym) {
     try {
         const chartUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSym}?interval=1mo&range=5y`;
         const chartJsonStr = await fetchWithFallback(chartUrl);
-        const chartJson = typeof chartJsonStr === 'string' ? JSON.parse(chartJsonStr) : chartJsonStr;
+        const chartJson = JSON.parse(chartJsonStr);
         const result = chartJson?.chart?.result?.[0];
         const meta = result?.meta;
         
@@ -436,10 +427,6 @@ async function fetchYahooQuote(yahooSym) {
                 const years = months/12;
                 return ((Math.pow(curr/old, 1/years) - 1) * 100);
             };
-            
-            // Try to find Beta in the meta or fallback to 1.0
-            // Note: Chart API doesn't usually return Beta, but we keep this function simple for price/returns
-            
             return { 
                 name: meta.symbol.replace('.NS', '').replace('.BO', ''), 
                 price: meta.regularMarketPrice, 
@@ -456,7 +443,7 @@ async function fetchYahooQuote(yahooSym) {
             };
         }
     } catch(e) {
-        // Quote API Fallback - Better for Beta
+        // Try Quote API
         const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${yahooSym}`;
         const jsonStr = await fetchWithFallback(url);
         const json = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
@@ -479,27 +466,12 @@ async function fetchGoogleFinance(sym) {
     let html = await fetchWithFallback(`https://www.google.com/finance/quote/${sym}:NSE`);
     if (html.includes("Couldn't find")) html = await fetchWithFallback(`https://www.google.com/finance/quote/${sym}:BSE`);
     
-    // Enhanced Regex Patterns to catch changing Google Class Names
-    const pricePatterns = [
-        /class="YMlKec fxKbKc">₹?([0-9,.]+)</, // Standard 2024
-        /class="AHmHk">₹?([0-9,.]+)</,        // Alternative
-        /class="zzDege">₹?([0-9,.]+)</,       // Fallback
-        />₹\s?([0-9,.]+)<(?:\/span|\/div)>/   // Generic Currency match
-    ];
-    
-    let price = null;
-    for(let pattern of pricePatterns) {
-        let match = html.match(pattern);
-        if(match) {
-            price = parseFloat(match[1].replace(/,/g, ''));
-            break;
-        }
-    }
-
+    const priceMatch = html.match(/class="YMlKec fxKbKc">₹?([0-9,.]+)</);
     const nameMatch = html.match(/<div class="zzDege">([^<]+)</) || html.match(/<h1[^>]*>([^<]+)</);
     const rangeMatch = html.match(/Year range.*?<div[^>]*>₹?([0-9,.]+)\s*-\s*₹?([0-9,.]+)/);
 
-    if (price) {
+    if (priceMatch) {
+        const price = parseFloat(priceMatch[1].replace(/,/g, ''));
         let high52 = 0, low52 = 0;
         if(rangeMatch) {
             low52 = parseFloat(rangeMatch[1].replace(/,/g, ''));
