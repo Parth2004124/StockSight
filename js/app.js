@@ -36,7 +36,6 @@ function saveState(pushToCloud = true) {
             const res = await fetch(SHEET_API_URL, {
                 method: 'POST',
                 body: JSON.stringify(cleanPayload),
-                // Removed credentials: 'omit' per instruction
                 headers: { "Content-Type": "text/plain" } 
             });
             const json = await res.json();
@@ -52,7 +51,6 @@ function saveState(pushToCloud = true) {
                     method: 'POST',
                     body: JSON.stringify(cleanPayload),
                     mode: 'no-cors',
-                    // Removed credentials: 'omit' per instruction
                     headers: { "Content-Type": "text/plain" }
                 });
                 updateCloudStatus('success', 'Saved (Blind)');
@@ -125,7 +123,6 @@ async function performCloudSync() {
     updateCloudStatus('loading', 'Syncing...');
     isOfflineMode = false;
     try {
-        // Removed credentials: 'omit' per instruction
         const response = await fetch(SHEET_API_URL, { method: 'GET' });
         if (!response.ok) throw new Error("HTTP " + response.status);
         const cloudData = await response.json();
@@ -191,12 +188,12 @@ async function fetchWithFallback(targetUrl) {
     let lastError;
     for (const proxy of PROXIES) {
         try {
-            // Removed AbortController and setTimeout per instruction
             const res = await fetch(proxy.url(targetUrl));
             if(!res.ok) throw new Error(`HTTP ${res.status}`);
             let content = proxy.type === 'json' ? (await res.json()).contents : await res.text();
             if(!content || content.length < 50) throw new Error("Empty/Blocked");
-            if(targetUrl.includes('yahoo') && !content.trim().startsWith('{') && !content.includes('QuoteSummaryStore')) throw new Error("Invalid Yahoo");
+            // Relaxed Yahoo check to be more robust
+            if(targetUrl.includes('yahoo') && !content.includes('Chart') && !content.includes('quoteResponse') && !content.includes('QuoteSummaryStore') && !content.trim().startsWith('{')) throw new Error("Invalid Yahoo");
             return content;
         } catch(e) { lastError = e; }
     }
@@ -225,9 +222,28 @@ async function fetchAsset(input) {
 
 async function fetchMutualFund(code) {
     const url = `https://api.mfapi.in/mf/${code}`;
-    const res = await fetch(url);
-    if(!res.ok) throw new Error("MF Not Found");
-    const json = await res.json();
+    let json;
+    
+    // Try Direct First
+    try {
+        const res = await fetch(url);
+        if (res.ok) {
+            json = await res.json();
+        } else {
+            throw new Error("Direct MF Failed");
+        }
+    } catch(e) {
+        // Fallback to Proxies if Direct Fails (e.g. CORS)
+        try {
+            const jsonStr = await fetchWithFallback(url);
+            json = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
+        } catch(proxyErr) {
+            throw new Error("MF Not Found");
+        }
+    }
+
+    if (!json || !json.data || !json.meta) throw new Error("Invalid MF Data");
+
     const data = { 
         name: json.meta.scheme_name, 
         price: parseFloat(json.data[0].nav), 
@@ -329,7 +345,7 @@ async function fetchYahooQuote(yahooSym) {
     try {
         const chartUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSym}?interval=1mo&range=5y`;
         const chartJsonStr = await fetchWithFallback(chartUrl);
-        const chartJson = JSON.parse(chartJsonStr);
+        const chartJson = typeof chartJsonStr === 'string' ? JSON.parse(chartJsonStr) : chartJsonStr;
         const result = chartJson?.chart?.result?.[0];
         const meta = result?.meta;
         
@@ -363,7 +379,7 @@ async function fetchYahooQuote(yahooSym) {
     } catch(e) {
         const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${yahooSym}`;
         const jsonStr = await fetchWithFallback(url);
-        const json = JSON.parse(jsonStr);
+        const json = typeof jsonStr === 'string' ? JSON.parse(jsonStr) : jsonStr;
         const res = json?.quoteResponse?.result?.[0];
         if(res) {
             return {
@@ -383,12 +399,27 @@ async function fetchGoogleFinance(sym) {
     let html = await fetchWithFallback(`https://www.google.com/finance/quote/${sym}:NSE`);
     if (html.includes("Couldn't find")) html = await fetchWithFallback(`https://www.google.com/finance/quote/${sym}:BSE`);
     
-    const priceMatch = html.match(/class="YMlKec fxKbKc">₹?([0-9,.]+)</);
-    const nameMatch = html.match(/<div class="zzDege">([^<]+)</);
+    // Enhanced Regex Patterns to catch changing Google Class Names
+    const pricePatterns = [
+        /class="YMlKec fxKbKc">₹?([0-9,.]+)</, // Standard 2024
+        /class="AHmHk">₹?([0-9,.]+)</,        // Alternative
+        /class="zzDege">₹?([0-9,.]+)</,       // Fallback
+        />₹\s?([0-9,.]+)<(?:\/span|\/div)>/   // Generic Currency match
+    ];
+    
+    let price = null;
+    for(let pattern of pricePatterns) {
+        let match = html.match(pattern);
+        if(match) {
+            price = parseFloat(match[1].replace(/,/g, ''));
+            break;
+        }
+    }
+
+    const nameMatch = html.match(/<div class="zzDege">([^<]+)</) || html.match(/<h1[^>]*>([^<]+)</);
     const rangeMatch = html.match(/Year range.*?<div[^>]*>₹?([0-9,.]+)\s*-\s*₹?([0-9,.]+)/);
 
-    if (priceMatch) {
-        const price = parseFloat(priceMatch[1].replace(/,/g, ''));
+    if (price) {
         let high52 = 0, low52 = 0;
         if(rangeMatch) {
             low52 = parseFloat(rangeMatch[1].replace(/,/g, ''));
