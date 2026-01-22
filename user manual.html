@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StockSight Cloud - User Manual</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f9fafb; color: #1f2937; }
+        .prose h1 { color: #111827; font-weight: 800; letter-spacing: -0.025em; }
+        .prose h2 { color: #374151; font-weight: 700; margin-top: 2em; border-bottom: 2px solid #e5e7eb; padding-bottom: 0.5em; }
+        .prose h3 { color: #4b5563; font-weight: 600; margin-top: 1.5em; }
+        .prose strong { color: #111827; font-weight: 600; }
+        .prose ul { list-style-type: disc; padding-left: 1.5em; margin-top: 0.5em; }
+        .prose li { margin-bottom: 0.5em; }
+        .bg-maroon { background-color: #800000; }
+        .text-maroon { color: #800000; }
+        .border-maroon { border-color: #800000; }
+    </style>
+</head>
+<body class="min-h-screen py-8 px-4 sm:px-6 lg:px-8">
+
+    <div class="max-w-3xl mx-auto bg-white shadow-lg rounded-xl overflow-hidden border border-gray-100">
+        
+        <!-- Navigation Header -->
+        <div class="bg-gray-50 border-b border-gray-200 px-6 py-4 flex justify-between items-center sticky top-0 z-10 bg-opacity-95 backdrop-blur-sm">
+            <a href="welcome.html" class="flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-maroon transition-colors group">
+                <svg class="w-4 h-4 transform group-hover:-translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
+                Back to Home
+            </a>
+            <span class="text-xs font-mono text-gray-400">v2.1</span>
+        </div>
+
+        <!-- Content -->
+        <div class="p-8 prose prose-slate max-w-none">
+            
+            <div class="text-center mb-10">
+                <h1 class="text-4xl mb-2">User Manual</h1>
+                <p class="text-lg text-gray-500 font-light">StockSight Cloud: Personal Portfolio Intelligence</p>
+            </div>
+
+            <h2>1. Introduction</h2>
+            <p class="leading-relaxed text-gray-600">
+                StockSight Cloud is a sophisticated, modular portfolio intelligence tool designed to help investors analyze stocks structurally. By removing emotional bias through data-driven scoring, it assists in managing portfolio allocation effectively. It leverages real-time data from robust sources including Screener.in, Yahoo Finance, and AMFI.
+            </p>
+
+            <h2>2. Getting Started</h2>
+            
+            <h3>Accessing the App</h3>
+            <p>Open <code>welcome.html</code> in your browser. Click the <span class="inline-block bg-maroon text-white text-xs px-2 py-0.5 rounded font-bold">Enter Terminal</span> button to load the main dashboard.</p>
+
+            <h3>The Interface</h3>
+            <ul class="text-gray-600 text-sm">
+                <li><strong>Sidebar (Left):</strong> Your command center. Use the search bar here to add stocks or view your watchlist items.</li>
+                <li><strong>Main Dashboard (Right):</strong> The primary workspace displaying Portfolio cards, Watchlist cards, and deep Analytics.</li>
+                <li><strong>Tabs (Top):</strong> Seamlessly switch between "My Portfolio", "Watchlist", and "Analytics" views.</li>
+                <li><strong>Stocky Button (Bottom Right):</strong> Your gateway to the AI assistant.</li>
+            </ul>
+
+            <h2>3. Managing Assets</h2>
+
+            <h3>Adding Stocks/ETFs/MFs</h3>
+            <ol class="list-decimal pl-5 space-y-1 text-gray-600 text-sm">
+                <li>Navigate to the <strong>Sidebar</strong>.</li>
+                <li>Type the ticker symbol (e.g., <code>TCS</code>, <code>HDFCBANK</code>) or the Mutual Fund Scheme Code (e.g., <code>120503</code>).</li>
+                <li>Press <strong>Enter</strong> or click the <strong>Add</strong> button.</li>
+                <li>The system automatically fetches data. If a stock isn't found immediately, an advanced auto-search triggers to locate the correct symbol.</li>
+            </ol>
+
+            <h3>Building Your Portfolio</h3>
+            <p>Once a card appears in the <strong>Watchlist</strong> tab:</p>
+            <ul class="text-gray-600 text-sm">
+                <li>Locate the input fields for <strong>Qty</strong> and <strong>Avg</strong> price on the card.</li>
+                <li>Enter a quantity greater than 0.</li>
+                <li>The card automatically migrates to the <strong>My Portfolio</strong> tab.</li>
+                <li>Real-time P&L is calculated instantly based on the live price versus your entered average.</li>
+            </ul>
+
+            <h3>Removing Assets</h3>
+            <ul class="text-gray-600 text-sm">
+                <li><strong>From Watchlist:</strong> Hover over the item in the sidebar and click the red "DEL" button.</li>
+                <li><strong>From Portfolio:</strong> Simply set the <strong>Qty</strong> to 0. The card moves back to the Watchlist, where it can be deleted.</li>
+            </ul>
+
+            <h2>4. Understanding Scores & Analysis</h2>
+            <p>StockSight employs a rigorous dual-scoring model for every equity asset.</p>
+
+            <h3>A. Fundamental Score (Timing & Health)</h3>
+            <p>Evaluates current financial health and market momentum. Max Score: 100.</p>
+            <div class="grid grid-cols-2 gap-4 text-sm mb-4">
+                <div class="bg-gray-50 p-3 rounded border border-gray-100"><strong>Business (40%)</strong><br>Sales Growth, Profit Growth, OPM.</div>
+                <div class="bg-gray-50 p-3 rounded border border-gray-100"><strong>Moat (20%)</strong><br>ROE, ROCE, Market Dominance.</div>
+                <div class="bg-gray-50 p-3 rounded border border-gray-100"><strong>Management (20%)</strong><br>Capital Allocation (PE vs Growth).</div>
+                <div class="bg-gray-50 p-3 rounded border border-gray-100"><strong>Risk (20%)</strong><br>Volatility (Beta), Market Cap stability.</div>
+            </div>
+            
+            <p><strong>Signals:</strong></p>
+            <ul class="space-y-1 text-sm">
+                <li><span class="text-green-600 font-bold">🟢 BUY (≥ 65)</span>: Strong fundamentals aligned with good timing.</li>
+                <li><span class="text-red-600 font-bold">🔴 SELL (≤ 40)</span>: Deteriorating fundamentals or extreme overvaluation.</li>
+                <li><span class="text-yellow-600 font-bold">🟡 HOLD/WAIT (41-64)</span>: Decent company, but timing or valuation isn't optimal.</li>
+            </ul>
+
+            <h3>B. Porter's 5 Forces Score (Quality & Longevity)</h3>
+            <p>Evaluates long-term competitive advantage. Max Score: 100.</p>
+            <ul class="text-gray-600 text-sm">
+                <li><strong>Barriers to Entry:</strong> Can new competitors easily enter?</li>
+                <li><strong>Supplier Power:</strong> Does the company dictate terms?</li>
+                <li><strong>Buyer Power:</strong> Do customers have high switching costs?</li>
+                <li><strong>Threat of Substitutes:</strong> Is the product essential?</li>
+                <li><strong>Competitive Rivalry:</strong> Is the market crowded or consolidated?</li>
+            </ul>
+
+            <h2>5. Stocky AI Assistant</h2>
+            <p>Stocky is your intelligent chatbot. Click the floating robot button to interact.</p>
+
+            <h3>Capabilities</h3>
+            <ul class="text-gray-600 text-sm">
+                <li><strong>Analyze Assets:</strong> Ask <em>"Explain ITC"</em> or <em>"Is Tata Motors a buy?"</em>. Stocky will fetch data even if it's not in your list.</li>
+                <li><strong>Compare Stocks:</strong> Ask <em>"Compare HDFC vs ICICI"</em>.</li>
+                <li><strong>Risk Check:</strong> Ask <em>"Is my portfolio risky?"</em>.</li>
+                <li><strong>Portfolio Allocation:</strong> Ask <em>"Invest 1 Lakh for me"</em>. Stocky generates a weighted allocation strategy based on asset quality scores.</li>
+            </ul>
+
+            <h3>Advanced Commands</h3>
+            <ul class="text-gray-600 text-sm">
+                <li><strong>"What is the target for [Stock]?"</strong>: Reveals Moreshwar dynamic levels.</li>
+                <li><strong>"Why is the score low?"</strong>: Drills down into the specific metric dragging the score down.</li>
+            </ul>
+
+            <h2>6. Analytics Tab</h2>
+            <p>The <strong>Analytics</strong> tab offers a high-level portfolio X-ray:</p>
+            <ul class="text-gray-600 text-sm">
+                <li><strong>Asset Allocation:</strong> Visual breakdown of Equity vs Cash vs Gold/ETFs.</li>
+                <li><strong>Performance:</strong> Total Portfolio P&L tracking.</li>
+                <li><strong>Health Score:</strong> Weighted average quality score of your holdings.</li>
+                <li><strong>Action Plan:</strong> Automated, actionable suggestions (Buy/Sell/Review) based on live data.</li>
+            </ul>
+
+            <h2>7. Troubleshooting</h2>
+            <div class="space-y-4">
+                <div class="p-4 bg-yellow-50 rounded-lg border border-yellow-100">
+                    <h4 class="font-bold text-yellow-800 text-sm mb-1">"Asset Not Found"</h4>
+                    <p class="text-xs text-yellow-700">Ensure you use the correct NSE/BSE symbol. Try typing the full name (e.g., "Reliance Industries") instead of just "RIL". For Mutual Funds, use the AMFI Code.</p>
+                </div>
+                <div class="p-4 bg-blue-50 rounded-lg border border-blue-100">
+                    <h4 class="font-bold text-blue-800 text-sm mb-1">"Score is 5 / Data Insufficient"</h4>
+                    <p class="text-xs text-blue-700">Common for Finance/Bank stocks where "Operating Profit Margin" (OPM) is N/A. The system normalizes this, but occasional data source variations may trigger a safety penalty rather than a zero-out.</p>
+                </div>
+                <div class="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                    <h4 class="font-bold text-gray-800 text-sm mb-1">"Data Not Loading"</h4>
+                    <p class="text-xs text-gray-600">The app relies on public proxies. If the network is slow, wait a moment or click the refresh button in the sidebar.</p>
+                </div>
+            </div>
+
+        </div>
+        
+        <!-- Footer -->
+        <div class="bg-gray-50 border-t border-gray-200 px-8 py-6 text-center">
+            <p class="text-xs text-gray-400">© 2026 StockSight Cloud. All rights reserved.</p>
+        </div>
+    </div>
+
+</body>
+</html>
