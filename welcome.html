@@ -10,7 +10,6 @@
         body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
         .bg-maroon { background-color: #800000; }
         .text-maroon { color: #800000; }
-        .focus-ring { --tw-ring-color: #800000; }
     </style>
 </head>
 <body class="flex items-center justify-center min-h-screen p-4 bg-gray-100">
@@ -25,79 +24,44 @@
             <p class="text-sm text-gray-500 mt-2">Personal Portfolio Intelligence</p>
         </div>
 
-        <!-- Login Form -->
+        <!-- Entry Area -->
         <div class="p-8 space-y-6">
-            <div class="space-y-2">
-                <label class="text-xs font-bold text-gray-400 uppercase tracking-wide">Access Code</label>
-                <input type="password" id="password" 
-                    class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-maroon focus:border-transparent transition-all text-sm placeholder-gray-300"
-                    placeholder="Enter Password"
-                    onkeypress="handleEnter(event)"
-                    autocomplete="off">
-                <p id="error-msg" class="text-red-500 text-xs font-medium hidden flex items-center gap-1 animate-pulse">
-                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
-                    Incorrect Access Code
-                </p>
+            <div class="text-center text-gray-600 text-sm leading-relaxed">
+                Welcome to your personal terminal. <br>
+                Analyze stocks, track your portfolio, and consult with Stocky AI.
             </div>
 
-            <button onclick="login()" 
+            <button onclick="enterApp()" 
                 class="w-full bg-maroon hover:bg-red-900 text-white font-bold py-3 rounded-lg transition-all shadow-md hover:shadow-lg flex justify-center items-center gap-2 active:scale-95">
                 <span>Enter Terminal</span>
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"></path></svg>
             </button>
+            
+            <div class="text-center">
+                <a href="https://Parth2004124.github.io/StockSight/user%20manual.html" target="_blank" class="text-xs text-maroon hover:underline font-semibold">Read User Manual</a>
+            </div>
         </div>
         
         <div class="bg-gray-50 p-4 text-center border-t border-gray-100">
-            <p class="text-[10px] text-gray-400">Restricted Access • v2.0</p>
+            <p class="text-[10px] text-gray-400">StockSight System • v2.1</p>
         </div>
     </div>
 
     <script>
         // CONFIGURATION
         const TARGET_PAGE = "index.html"; // The file name of your main stock app
-        const CORRECT_PASS = "PARTH";
 
-        function login() {
-            const input = document.getElementById('password');
-            const error = document.getElementById('error-msg');
+        function enterApp() {
             const btn = document.querySelector('button');
             
-            if (input.value === CORRECT_PASS) {
-                // Success State
-                sessionStorage.setItem('stockSightAuth', 'true');
-                
-                // Loading Animation
-                btn.innerHTML = `<svg class="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>`;
-                btn.classList.add('opacity-80', 'cursor-not-allowed');
-                
-                setTimeout(() => {
-                    window.location.href = TARGET_PAGE;
-                }, 600);
-            } else {
-                // Error State
-                error.classList.remove('hidden');
-                input.classList.add('border-red-500', 'bg-red-50');
-                input.value = '';
-                input.focus();
-                
-                // Shake Animation
-                const form = input.parentElement;
-                form.style.transform = "translateX(4px)";
-                setTimeout(() => form.style.transform = "translateX(-4px)", 100);
-                setTimeout(() => form.style.transform = "translateX(4px)", 200);
-                setTimeout(() => form.style.transform = "translateX(0)", 300);
-            }
+            // Loading Animation
+            btn.innerHTML = `<svg class="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>`;
+            btn.classList.add('opacity-80', 'cursor-not-allowed');
+            
+            setTimeout(() => {
+                window.location.href = TARGET_PAGE;
+            }, 500);
         }
-
-        function handleEnter(e) {
-            if (e.key === "Enter") login();
-            // Clear error UI when typing
-            document.getElementById('error-msg').classList.add('hidden');
-            document.getElementById('password').classList.remove('border-red-500', 'bg-red-50');
-        }
-        
-        // Auto-focus input on load
-        window.onload = () => document.getElementById('password').focus();
     </script>
 </body>
 </html>
